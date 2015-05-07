@@ -1,0 +1,247 @@
+--this is the code to use for scorecard
+
+--drop table semi_table;
+
+create volatile table semi_table as (
+sel
+--QTR_END_DT,MONTH_END_DT,WEEK_END_DT
+RETAIL_WK_END_DATE,RTL_QTR_OF_RTL_YEAR_ID,RETAIL_YEAR
+
+--the line below needs to be changed. should be % of HFR out of all returns
+,sum(TRX_CNT) as cnt
+,sum(case when RETURN_TYPE = 'efg' then cnt_return else null end) as cnt_rtrn
+,sum(sold_items) as cnt_si
+,sum(RTRN_LABEL_COUNT) as cnt_label
+,sum(net_loss) as losses
+,sum(case when efg_YN = 'Y' then return_amt else null end) as rtrn_label_gmv
+,sum(return_amt) as rtrn_amt_all
+,sum(case when HFR_ELIGIBLE_YN = 'abc' then gmv_usd else null end) as gmv
+,sum(USER_PAID) as USER_PAID
+,sum(cnt_return) as cnt_rtrn_all
+---rate
+,cast(rtrn_amt as decimal(18,6)) /cast(gmv as decimal(18,6)) as return_rate
+,cast(claim_amount as decimal(18,6))/cast(rtrn_amt as decimal(18,6)) as claim_rate
+,cast(rtrn_amt as decimal(18,6))/cast(cnt_rtrn as decimal(18,6)) as rtrn_asp
+,cast(snad_amt as decimal(18,6))/cast(rtrn_amt as decimal(18,6)) as xyz_rate
+,cast(rtrn_label_gmv as decimal(18,6))/cast(rtrn_amt_all as decimal(18,6)) as label_rate
+
+from RETURN
+
+group by 1,2,3
+
+) WITH DATA ON COMMIT PRESERVE ROWS;
+
+--drop table semi_table2;
+
+--***semi_table2 is for keeping only indicators actually being used in the scorecard***-
+---joining table b for xyz
+--joining table c for hij
+--joining table d for mmm
+--joining table e for qwe
+
+create volatile table semi_table2 as (
+sel
+a.RETAIL_WK_END_DATE,a.RTL_QTR_OF_RTL_YEAR_ID,a.RETAIL_YEAR
+,a.return_rate                   
+,a.claim_rate                    
+,a.rtrn_asp                      
+,a.xyz_rate                     
+,a.rtrn_label_rate               
+--,a.losses                        
+,a.rtrn_label_loss               
+,a.rtrn_amt
+,a.claim_amount
+,a.cnt_label
+,AGE_FOR_id
+,AGE_FOR_id
+,b.adoption
+,b.a_adoption
+,b.gmv
+,b.total_gmv
+, 'US' as site
+,c.eRC_ADOPTION
+,d.slr_net_cnt
+, e.carrier - PAID as label_losses
+from semi_table a
+
+---joining table b for gmv_adoption and si_adoption
+join
+(
+sel
+RETAIL_WK_END_DATE
+,sum(case when n_YN = 'a' then usd else null end) as hfr_gmv
+,sum(case when n_YN = 'a' then sold else null end) as hfr_si
+,sum(sold_items) as cnt_si
+,sum(usd) as total
+
+---rate
+,cast(gm as decimal(18,6)) /cast(to_gmv as decimal(18,6)) as gm_ado
+,cast(si as decimal(18,6))/cast(cnt as decimal(18,6)) as si_ado
+from P_RTRN_T.RETURN_DATA_CUBE
+group by 1
+) b
+on a.RETAIL_WK_END_DATE = b.RETAIL_WK_END_DATE
+
+--joining table c for adoption
+
+join
+(
+SEL 
+A.WEEK_END_DT
+,cal.RETAIL_WK_END_DATE
+,a_LL,a_elig_LL
+,CAST(a_LL AS DECIMAL(16,5))/a_elig_LL AS eRC_ADOPTION
+,MA_eRC_LL
+,MA_eRC_eli_LL
+,MA_ADOPTION   
+FROM 
+(
+SEL 
+WEEK_END_DT
+,        TOTAL_ALL AS MA_eli_LL
+,OPT_IN_US_SITE AS MA_eRC_LL,ADOPTION_RATE AS MA
+FROM    syz.abc
+WHERE MA_SGMNT IN ('Managed')
+)A
+INNER JOIN
+(
+SEL WEEK_END_DT
+,SUM(TOTAL_ALL) AS el_LL
+,SUM(OPT_IN_US_SITE)AS e_LL 
+FROM abc.def
+GROUP BY 1
+)B
+ON B.WEEK_END_DT=A.WEEK_END_DT
+
+join date cal
+on a.Wk_END_DT = cal.dt
+) c
+on a.DATE = c.DATE
+
+
+join 
+(
+sel
+a.WK_DATE
+,out
+,sum(cnt) as in
+,in - out as net_cnt
+from 
+abc.jkj a
+
+join 
+(
+sel
+WK_END_DATE
+,sum(cnt) as cnt_out
+from 
+abc.yhk
+where in_ind = 0
+group by 1
+) b
+on a.DATE = b.DATE
+
+where in_ind = 1
+group by 1,2
+) d
+on a.DATE = d.DATE
+
+join 
+(
+sel
+DATE
+,sum(AMT) as charge
+from plo r
+join cal_dt cal
+on r.DT = cal.dt
+group by 1
+where 1=1
+AND  CAL.WEEK_ID < 0
+and re_dt >= '2000-11-01'
+) e
+on e.R_DATE = a.DATE
+
+join cal_dt cal
+on a.DATE = cal.dt
+
+) WITH DATA ON COMMIT PRESERVE ROWS;  
+
+----drop table semi_table3;
+
+--***semi_table3 reshapes dataset from wide to long***--
+
+create volatile table semi_table3 as (
+
+SELECT DATE, metric, cast(actuals as decimal(18,5)) as actuals, site
+
+FROM TD_UNPIVOT
+ (
+   ON (SELECT * FROM semi_table2)
+   USING
+      VALUE_COLUMNS('actuals')
+      UNPIVOT_COLUMN('metric')
+      COLUMN_LIST('b_rate', 'a_rate', 'rtrn_asp','ac_rate','sad_rate','ds_rate', 'r_label_loss', 'a_adoption', 'adoption', 'ADOPTION', 'net_cnt', 'label', 'r_losses', 'losses')
+  ) a
+ ) WITH DATA ON COMMIT PRESERVE ROWS;
+ 
+ drop table xyz.sd_LH;
+ 
+---adding in qtd and ytd for the current week.
+create table xyz.sd_LH as (
+
+sel
+d.*
+,cast(qtd as decimal(18,5)) as qtd, cast(ytd as decimal(18,5)) as ytd
+,c.actuals as p_actuals, d.actuals - p_actuals as wow_change
+
+---For qtd
+FROM TD_UNPIVOT
+ (
+   ON (SELECT * FROM 
+   (
+		   sel
+		max(RETAIL_WK_END_DATE) as RETAIL_WK_END_DATE
+		,cast(sum(cast(amt as decimal(18,5)))/sum(cast(a_gmv as decimal(18,5))) as decimal(18,5)) as return_rate
+		,cast(sum(cast(gmv as decimal(18,5)))/sum(cast(t_gmv as decimal(18,5))) as decimal(18,5)) as gmv_adoption
+		,cast(sum(cast(amount as decimal(18,5)))/sum(cast(b_amt as decimal(18,5))) as decimal(18,5)) as claim_rate
+		,cast(sum(cast(losses as decimal(18,5))) as decimal(18,5)) as losses
+		from semi_table2
+		where R_ID =0  --keeping qtd records only
+   ) a)
+   USING
+      VALUE_COLUMNS('qtd')
+      UNPIVOT_COLUMN('metric')
+      COLUMN_LIST('return_rate', 'c_rate', 'adoption', 'losses')
+  ) b
+  
+ --for ytd
+join TD_UNPIVOT
+ (
+   ON (SELECT * FROM 
+   (
+		   sel
+		max(RETAIL_WK_END_DATE) as RETAIL_WK_END_DATE
+		,cast(sum(cast(r_amt as decimal(18,5)))/sum(cast(h_gmv as decimal(18,5))) as decimal(18,5)) as return_rate
+		,cast(sum(cast(gmv as decimal(18,5)))/sum(cast(t_gmv as decimal(18,5))) as decimal(18,5)) as gmv_adoption
+		,cast(sum(cast(c_amount as decimal(18,5)))/sum(cast(r_amt as decimal(18,5))) as decimal(18,5)) as claim_rate
+		,cast(sum(cast(losses as decimal(18,5))) as decimal(18,5)) as losses
+		from semi_table2
+		where YEAR_ID =0 ---keeping ytd records only
+   ) d)
+   USING
+      VALUE_COLUMNS('ytd')
+      UNPIVOT_COLUMN('metric')
+      COLUMN_LIST('r_rate', 'c_rate', 'adoption', 'losses')
+  ) e
+  on b.DATE = e.DATE
+    and b.metric = e.metric
+   
+  right join semi_table3 d
+  on b.date = d.date
+  and b.metric = d.metric
+  
+  left join semi_table3 c
+  on d.date = c.date+7
+  and d.metric = c.metric
+
+) WITH DATA PRIMARY INDEX (date);
